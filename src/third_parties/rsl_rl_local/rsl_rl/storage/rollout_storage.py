@@ -217,10 +217,21 @@ class RolloutStorage:
                     rnd_state_batch = None
 
                 # Yield the mini-batch
-                yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+                yield (
+                    obs_batch,
+                    critic_observations_batch,
+                    actions_batch,
+                    target_values_batch,
+                    advantages_batch,
+                    returns_batch,
+                    old_actions_log_prob_batch,
+                    old_mu_batch,
+                    old_sigma_batch, (
                     None,
                     None,
-                ), None, rnd_state_batch
+                    ),
+                    None,
+                    rnd_state_batch)
 
     # for RNNs only
     def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
@@ -292,3 +303,9 @@ class RolloutStorage:
                 ), masks_batch, rnd_state_batch
 
                 first_traj = last_traj
+
+
+
+
+
+
