@@ -38,11 +38,14 @@ class PPO:
         clip_predicted_values=True,
         schedule="fixed",
         desired_kl=0.01,
-        device="cpu",
+        device="cuda:0",
         normalize_advantage_per_mini_batch=False,
         reward_scale=1.0,
         state_normalizer=None,
         value_normalizer=None,
+        action_std_schedule: str = "decay",
+        action_std_decay_rate: float = 0.999,
+        action_std_min = 0.05,
     ):
         self.device = device
         self.clip_param = ratio_clip
@@ -74,6 +77,11 @@ class PPO:
         self.reward_scale = reward_scale
         self.state_normalizer = state_normalizer
         self.value_normalizer = value_normalizer
+        # Action std scheduling
+        self.action_std_schedule = action_std_schedule.lower() if action_std_schedule else "fixed"
+        self.action_std_decay_rate = action_std_decay_rate
+        self.action_std_min = action_std_min
+        self._update_calls = 0
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         # create rollout storage
@@ -99,7 +107,7 @@ class PPO:
             critic_obs = self.state_normalizer.normalize(critic_obs)
 
         if self.actor_critic.is_recurrent:
-            self.transition.hidden_states = self.actor_critic.get_hidden_states()
+            self.transition.hidden_states = self._detach_hidden_states(self.actor_critic.get_hidden_states())
 
         # Compute the actions and values
         self.transition.actions = self.actor_critic.act(obs).detach()
@@ -119,12 +127,15 @@ class PPO:
         self.transition.dones = dones
 
         # Bootstrapping on time outs
+        time_outs = None
         if "time_outs" in infos:
             time_outs = infos["time_outs"].unsqueeze(1).to(self.device)
             reward = reward + self.gamma * torch.squeeze(self.transition.values * time_outs, dim=1)
         # Record the transition
         self.transition.rewards = reward * self.reward_scale
         self.storage.add_transitions(self.transition)
+        if self.actor_critic.is_recurrent:
+            self._reset_recurrent_state(dones, time_outs)
 
     def compute_returns(self, last_critic_obs):
         # compute value for the last step
@@ -232,7 +243,46 @@ class PPO:
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
         mean_entropy /= num_updates
+        # Optionally anneal action std after each policy update
+        self._update_calls += 1
+        self._anneal_action_std()
         # Clear the storage
         self.storage.clear()
 
         return mean_value_loss, mean_surrogate_loss, mean_entropy
+
+    def _detach_hidden_states(self, hidden_states):
+        if hidden_states is None:
+            return None
+        if isinstance(hidden_states, (list, tuple)):
+            return tuple(self._detach_hidden_states(h) for h in hidden_states)
+        return hidden_states.detach()
+
+    def _reset_recurrent_state(self, dones, time_outs=None):
+        done_mask = dones.squeeze(-1).bool()
+        if time_outs is not None:
+            done_mask = torch.logical_or(done_mask, time_outs.squeeze(-1).bool())
+        if done_mask.any():
+            self.actor_critic.reset(done_mask)
+
+    def _anneal_action_std(self):
+        """Multiplicative decay of action noise std; no-op when schedule is fixed."""
+        if self.action_std_schedule == "fixed":
+            return
+        if self.action_std_decay_rate >= 1.0:
+            return
+        with torch.no_grad():
+            # Apply decay depending on noise parameterization
+            if self.actor_critic.noise_std_type == "scalar":
+                new_std = self.actor_critic.std * self.action_std_decay_rate
+                if self.action_std_min is not None:
+                    new_std = torch.clamp(new_std, min=self.action_std_min)
+                self.actor_critic.std.copy_(new_std)
+            elif self.actor_critic.noise_std_type == "log":
+                new_log_std = self.actor_critic.log_std + torch.log(
+                    torch.tensor(self.action_std_decay_rate, device=self.actor_critic.log_std.device)
+                )
+                if self.action_std_min is not None:
+                    min_log_std = torch.log(torch.tensor(self.action_std_min, device=self.actor_critic.log_std.device))
+                    new_log_std = torch.max(new_log_std, min_log_std)
+                self.actor_critic.log_std.copy_(new_log_std)
