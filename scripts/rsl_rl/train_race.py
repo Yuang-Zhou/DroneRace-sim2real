@@ -114,14 +114,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     rewards = {
         "progress_goal_reward_scale": 8.0,
         "time_penalty_reward_scale": -0.2,
-        "forward_speed_reward_scale": 0.3,
         "gate_pass_reward_scale": 25.0,
-        "gate_speed_reward_scale": 2.0,
         "gate_miss_reward_scale": -20.0,
         "ang_vel_l2_reward_scale": 0.001,
         "lookat_next_gate_reward_scale": 0.05,
         "crash_reward_scale": -12.0,
-        "crash_speed_reward_scale": -0.1,
         "death_cost": -18.0,
     }
     # TODO ----- END -----
