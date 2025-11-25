@@ -17,11 +17,15 @@ class QuadcopterPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     empirical_normalization = False
     wandb_project = "ese651_quadcopter"  # Wandb project name for logging
     policy = RslRlPpoActorCriticCfg(
+        class_name="ActorCriticRecurrent",
         init_noise_std=1.0,
         actor_hidden_dims=[128, 128],
         critic_hidden_dims=[512, 256, 128, 128],
         activation="elu",
         min_std=0.0,
+        rnn_type="gru",
+        rnn_hidden_size=128,
+        rnn_num_layers=1,
     )
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,

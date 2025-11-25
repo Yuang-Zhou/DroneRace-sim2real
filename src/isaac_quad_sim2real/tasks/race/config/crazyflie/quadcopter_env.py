@@ -189,6 +189,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     )
 
     beta = 1.0         # 1.0 for no smoothing, 0.0 for no update
+    action_delay_steps = 1  # number of policy steps to delay commands (models radio/firmware latency)
 
     # Reset variables
     min_altitude = 0.1
@@ -253,6 +254,10 @@ class QuadcopterEnv(DirectRLEnv):
         self._actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
         self._previous_actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
         self._previous_yaw = torch.zeros(self.num_envs, device=self.device)
+        # action delay buffer: shape (delay+1, num_envs, action_dim); index 0 is “oldest”
+        self._action_delay_buf = torch.zeros(
+            self.cfg.action_delay_steps + 1, self.num_envs, self.cfg.action_space, device=self.device
+        )
 
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
@@ -620,8 +625,13 @@ class QuadcopterEnv(DirectRLEnv):
     ##########################################################
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone().clamp(-1.0, 1.0)    # actions come directly from the NN
-        self._actions = self.cfg.beta * self._actions + (1 - self.cfg.beta) * self._previous_actions
+        # Push new action into delay buffer and pop the delayed command to apply
+        self._action_delay_buf = torch.roll(self._action_delay_buf, shifts=-1, dims=0)
+        self._action_delay_buf[-1] = actions.clone().clamp(-1.0, 1.0)
+        delayed_actions = self._action_delay_buf[0]
+
+        # Smooth delayed command (beta=1.0 -> no smoothing)
+        self._actions = self.cfg.beta * delayed_actions + (1 - self.cfg.beta) * self._previous_actions
 
         # Store current actions for next timestep (for action smoothing and observations)
         self._previous_actions = self._actions.clone()

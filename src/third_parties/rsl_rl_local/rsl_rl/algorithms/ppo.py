@@ -21,28 +21,28 @@ class PPO:
     """The actor critic module."""
 
     def __init__(
-            self,
-            actor_critic,
-            num_learning_epochs=1,
-            num_mini_batches=1,
-            clip_param=0.2,
-            ratio_clip=0.2,
-            value_clip=0.2,
-            gamma=0.998,
-            lam=0.95,
-            value_loss_coef=1.0,
-            entropy_coef=0.005,
-            learning_rate=1e-3,
-            max_grad_norm=1.0,
-            use_clipped_value_loss=True,
-            clip_predicted_values=True,
-            schedule="fixed",
-            desired_kl=0.01,
-            device="cpu",
-            normalize_advantage_per_mini_batch=False,
-            reward_scale=1.0,
-            state_normalizer=None,
-            value_normalizer=None,
+        self,
+        actor_critic,
+        num_learning_epochs=1,
+        num_mini_batches=1,
+        clip_param=0.2,
+        ratio_clip=0.2,
+        value_clip=0.2,
+        gamma=0.998,
+        lam=0.95,
+        value_loss_coef=1.0,
+        entropy_coef=0.005,
+        learning_rate=1e-3,
+        max_grad_norm=1.0,
+        use_clipped_value_loss=True,
+        clip_predicted_values=True,
+        schedule="fixed",
+        desired_kl=0.01,
+        device="cpu",
+        normalize_advantage_per_mini_batch=False,
+        reward_scale=1.0,
+        state_normalizer=None,
+        value_normalizer=None,
     ):
         self.device = device
         self.clip_param = ratio_clip
@@ -236,4 +236,3 @@ class PPO:
         self.storage.clear()
 
         return mean_value_loss, mean_surrogate_loss, mean_entropy
-

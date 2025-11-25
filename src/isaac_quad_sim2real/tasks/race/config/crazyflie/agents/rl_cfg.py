@@ -31,6 +31,16 @@ class RslRlPpoActorCriticCfg:
     min_std: float = MISSING
     """The minimum standard deviation for the policy."""
 
+    # Recurrent policy settings
+    rnn_type: str | None = None
+    """Type of RNN memory to use ('gru' or 'lstm'). None means feedforward."""
+
+    rnn_hidden_size: int | None = None
+    """Hidden size of the RNN memory."""
+
+    rnn_num_layers: int | None = None
+    """Number of stacked RNN layers."""
+
 
 @configclass
 class RslRlPpoAlgorithmCfg:

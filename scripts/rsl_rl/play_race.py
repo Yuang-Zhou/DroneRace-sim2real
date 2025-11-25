@@ -9,6 +9,7 @@
 
 import sys
 import os
+import yaml
 local_rsl_path = os.path.abspath("src/third_parties/rsl_rl_local")
 if os.path.exists(local_rsl_path):
     sys.path.insert(0, local_rsl_path)
@@ -32,6 +33,13 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--follow_robot", type=int, default=-1, help="Follow robot index.")
 parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+parser.add_argument("--device_cfg", type=str, default=None, help="YAML file with device-specific env overrides.")
+parser.add_argument(
+    "--action_delay_steps",
+    type=int,
+    default=None,
+    help="Policy-step delay to apply to actions (models radio/firmware latency).",
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -77,6 +85,15 @@ def main():
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
 
+    # apply device-specific env overrides if provided
+    if args_cli.device_cfg:
+        with open(args_cli.device_cfg, "r") as f:
+            device_overrides = yaml.safe_load(f) or {}
+        for key, value in device_overrides.items():
+            if hasattr(env_cfg, key):
+                setattr(env_cfg, key, value)
+        print(f"[INFO] Loaded device overrides from {args_cli.device_cfg}: {list(device_overrides.keys())}")
+
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -99,6 +116,8 @@ def main():
     env_cfg.is_train = False
     env_cfg.max_motor_noise_std = 0.0
     env_cfg.seed = args_cli.seed
+    if args_cli.action_delay_steps is not None:
+        env_cfg.action_delay_steps = args_cli.action_delay_steps
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)

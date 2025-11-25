@@ -9,6 +9,7 @@
 
 import sys
 import os
+import yaml
 
 local_rsl_path = os.path.abspath("src/third_parties/rsl_rl_local")
 if os.path.exists(local_rsl_path):
@@ -31,6 +32,13 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
+parser.add_argument("--device_cfg", type=str, default=None, help="YAML file with device-specific env overrides.")
+parser.add_argument(
+    "--action_delay_steps",
+    type=int,
+    default=None,
+    help="Policy-step delay to apply to actions (models radio/firmware latency).",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -83,12 +91,23 @@ torch.backends.cudnn.benchmark = False
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Train with RSL-RL agent."""
+    # apply device-specific env overrides if provided
+    if args_cli.device_cfg:
+        with open(args_cli.device_cfg, "r") as f:
+            device_overrides = yaml.safe_load(f) or {}
+        for key, value in device_overrides.items():
+            if hasattr(env_cfg, key):
+                setattr(env_cfg, key, value)
+        print(f"[INFO] Loaded device overrides from {args_cli.device_cfg}: {list(device_overrides.keys())}")
+
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
+    if args_cli.action_delay_steps is not None:
+        env_cfg.action_delay_steps = args_cli.action_delay_steps
 
     # set the environment seed
     # note: certain randomizations occur in the environment initialization so we set the seed here
@@ -120,7 +139,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "gate_miss_reward_scale": -20.0,
         "ang_vel_l2_reward_scale": 0.001,
         "lookat_next_gate_reward_scale": 0.05,
-        "crash_reward_scale": -12.0,
+        "crash_reward_scale": -15.0,
         "crash_speed_reward_scale": -0.1,
         "death_cost": -18.0,
     }

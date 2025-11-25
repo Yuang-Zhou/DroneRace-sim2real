@@ -73,8 +73,8 @@ class DefaultQuadcopterStrategy:
         if your PPO implementation works. You should delete it or heavily modify it once you begin the racing task."""
 
         # TODO ----- START ----- Define the tensors required for your custom reward structure
-        pos_w = self.env._robot.data.root_link_pos_w  # (N, 3)
-        gate_pos_w = self.env._desired_pos_w  # (N, 3)
+        pos_w = self.env._robot.data.root_link_pos_w              # (N, 3)
+        gate_pos_w = self.env._desired_pos_w                       # (N, 3)
         distance_to_goal = torch.linalg.norm(gate_pos_w - pos_w, dim=1)  # (N,)
         progress = self.env._last_distance_to_goal - distance_to_goal
 
@@ -85,35 +85,58 @@ class DefaultQuadcopterStrategy:
 
         if ids_gate_passed.numel() > 0:
             self.env._idx_wp[ids_gate_passed] = (
-                                                        self.env._idx_wp[ids_gate_passed] + 1
-                                                ) % self.env._waypoints.shape[0]
+                self.env._idx_wp[ids_gate_passed] + 1
+            ) % self.env._waypoints.shape[0]
 
             self.env._desired_pos_w[ids_gate_passed, :3] = (
                 self.env._waypoints[self.env._idx_wp[ids_gate_passed], :3]
             )
-
+            
             if hasattr(self.env, "_n_gates_passed"):
                 self.env._n_gates_passed[ids_gate_passed] += 1
 
-        ang_vel_b = self.env._robot.data.root_ang_vel_b  # (N, 3), [roll_rate, pitch_rate, yaw_rate]
-        ang_vel_l2 = torch.sum(ang_vel_b ** 2, dim=1)  # punishment
+        ang_vel_b = self.env._robot.data.root_ang_vel_b           # (N, 3), [roll_rate, pitch_rate, yaw_rate]
+        ang_vel_l2 = torch.sum(ang_vel_b ** 2, dim=1)             # punishment
+
+        lin_vel_b = self.env._robot.data.root_com_lin_vel_b
+        speed = torch.linalg.norm(lin_vel_b, dim=1)
+
+        # Next gate alignment
+        next_idx = (self.env._idx_wp + 1) % self.env._waypoints.shape[0]
+        next_gate_pos = self.env._waypoints[next_idx, :3]
+        drone_pos = self.env._robot.data.root_link_pos_w
+        vec_to_next_gate = next_gate_pos - drone_pos
+        vec_to_next_gate_norm = torch.nn.functional.normalize(vec_to_next_gate, dim=1)
+        attitude_mat = matrix_from_quat(self.env._robot.data.root_quat_w)
+        forward_dir = attitude_mat[:, :, 0]  # body x-axis in world frame
+        forward_dir_norm = torch.nn.functional.normalize(forward_dir, dim=1)
+        lookat_next_gate = torch.sum(forward_dir_norm * vec_to_next_gate_norm, dim=1)  # cosine similarity
 
         contact_forces = self.env._contact_sensor.data.net_forces_w
         crashed = (torch.norm(contact_forces, dim=-1) > 1e-8).squeeze(1).int()
         mask = (self.env.episode_length_buf > 100).int()
         crashed = crashed * mask
-        self.env._crashed = self.env._crashed + crashed
+        self.env._crashed = self.env._crashed + crashed 
         # TODO ----- END -----
 
         if self.cfg.is_train:
             # TODO ----- START ----- Compute per-timestep rewards by multiplying with your reward scales (in train_race.py)
-            rew_cfg = self.env.rew
+            rew_cfg = self.env.rew 
             rewards = {
                 "progress_goal": progress * rew_cfg.get("progress_goal_reward_scale", 0.0),
                 "gate_pass": gate_passed.float() * rew_cfg.get("gate_pass_reward_scale", 0.0),
+                "gate_speed": gate_passed.float() * speed * rew_cfg.get("gate_speed_reward_scale", 0.0),
+                "forward_speed": speed * rew_cfg.get("forward_speed_reward_scale", 0.0),
+                "time_penalty": torch.ones_like(progress) * rew_cfg.get("time_penalty_reward_scale", 0.0),
+                "lookat_next_gate": lookat_next_gate * rew_cfg.get("lookat_next_gate_reward_scale", 0.0),
                 "ang_vel_l2": (-ang_vel_l2) * rew_cfg.get("ang_vel_l2_reward_scale", 0.0),
                 "crash": crashed.float() * rew_cfg.get("crash_reward_scale", 0.0),
+                "crash_speed": crashed.float() * speed * rew_cfg.get("crash_speed_reward_scale", 0.0),
             }
+
+            # Penalize moving away from gate (gate miss) when progress is sufficiently negative
+            gate_miss = (progress < -0.05).float()
+            rewards["gate_miss"] = gate_miss * rew_cfg.get("gate_miss_reward_scale", 0.0)
 
             reward = torch.stack(list(rewards.values()), dim=0).sum(dim=0)
             reward = torch.where(
@@ -126,7 +149,7 @@ class DefaultQuadcopterStrategy:
                 for key, value in rewards.items():
                     if key in self._episode_sums:
                         self._episode_sums[key] += value
-        else:  # This else condition implies eval is called with play_race.py. Can be useful to debug at test-time
+        else:   # This else condition implies eval is called with play_race.py. Can be useful to debug at test-time
             reward = torch.zeros(self.num_envs, device=self.device)
             # TODO ----- END -----
 
@@ -270,6 +293,8 @@ class DefaultQuadcopterStrategy:
         self.env._previous_omega_meas[env_ids] = 0.0
         self.env._previous_omega_err[env_ids] = 0.0
         self.env._omega_err_integral[env_ids] = 0.0
+        # Clear action delay buffer
+        self.env._action_delay_buf[:, env_ids] = 0.0
 
         # Reset joints state
         joint_pos = self.env._robot.data.default_joint_pos[env_ids]
@@ -379,4 +404,3 @@ class DefaultQuadcopterStrategy:
         self.env._prev_x_drone_wrt_gate = torch.ones(self.num_envs, device=self.device)
 
         self.env._crashed[env_ids] = 0
-
