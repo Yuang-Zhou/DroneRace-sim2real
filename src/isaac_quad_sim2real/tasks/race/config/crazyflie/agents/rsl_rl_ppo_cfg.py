@@ -22,7 +22,7 @@ class QuadcopterPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         actor_hidden_dims=[128, 128],
         critic_hidden_dims=[512, 256, 128, 128],
         activation="elu",
-        min_std=0.0,
+        min_std=0.05,
         rnn_type="gru",
         rnn_hidden_size=128,
         rnn_num_layers=1,
@@ -38,6 +38,6 @@ class QuadcopterPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        desired_kl=0.01,
+        desired_kl=0.005,
         max_grad_norm=1.0,
     )
