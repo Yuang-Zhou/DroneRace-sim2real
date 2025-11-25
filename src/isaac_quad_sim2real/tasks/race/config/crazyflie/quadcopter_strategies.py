@@ -133,34 +133,94 @@ class DefaultQuadcopterStrategy:
         return reward
 
     def get_observations(self) -> Dict[str, torch.Tensor]:
-        """Get observations. Read reset_idx() and quadcopter_env.py to see which drone info is extracted from the sim.
-        The following code is an example. You should delete it or heavily modify it once you begin the racing task."""
+        """Get observations including waypoint positions and drone state."""
+        curr_idx = self.env._idx_wp % self.env._waypoints.shape[0]
+        next_idx = (self.env._idx_wp + 1) % self.env._waypoints.shape[0]
 
-        # TODO ----- START ----- Define tensors for your observation space. Be careful with frame transformations
-        #### Basic drone states, modify for your needs)
-        drone_pose_w = self.env._robot.data.root_link_pos_w  # (N, 3)
-        drone_lin_vel_b = self.env._robot.data.root_com_lin_vel_b  # (N, 3)
-        drone_quat_w = self.env._robot.data.root_quat_w  # (N, 4)
-        drone_ang_vel_b = self.env._robot.data.root_ang_vel_b  # (N, 3) [roll_rate, pitch_rate, yaw_rate]
-        current_gate_idx = self.env._idx_wp  # (N,)
-        gate_quat_w = self.env._waypoints_quat[current_gate_idx, :]  # (N, 4)
-        drone_pos_gate_frame = self.env._pose_drone_wrt_gate  # (N, 3)
+        wp_curr_pos = self.env._waypoints[curr_idx, :3]
+        wp_next_pos = self.env._waypoints[next_idx, :3]
+        quat_curr = self.env._waypoints_quat[curr_idx]
+        quat_next = self.env._waypoints_quat[next_idx]
+
+        rot_curr = matrix_from_quat(quat_curr)
+        rot_next = matrix_from_quat(quat_next)
+
+        verts_curr = torch.bmm(self.env._local_square, rot_curr.transpose(1, 2)) + wp_curr_pos.unsqueeze(1) + self.env._terrain.env_origins.unsqueeze(1)
+        verts_next = torch.bmm(self.env._local_square, rot_next.transpose(1, 2)) + wp_next_pos.unsqueeze(1) + self.env._terrain.env_origins.unsqueeze(1)
+
+        waypoint_pos_b_curr, _ = subtract_frame_transforms(
+            self.env._robot.data.root_link_state_w[:, :3].repeat_interleave(4, dim=0),
+            self.env._robot.data.root_link_state_w[:, 3:7].repeat_interleave(4, dim=0),
+            verts_curr.view(-1, 3)
+        )
+        waypoint_pos_b_next, _ = subtract_frame_transforms(
+            self.env._robot.data.root_link_state_w[:, :3].repeat_interleave(4, dim=0),
+            self.env._robot.data.root_link_state_w[:, 3:7].repeat_interleave(4, dim=0),
+            verts_next.view(-1, 3)
+        )
+
+        waypoint_pos_b_curr = waypoint_pos_b_curr.view(self.num_envs, 4, 3)
+        waypoint_pos_b_next = waypoint_pos_b_next.view(self.num_envs, 4, 3)
+
+        quat_w = self.env._robot.data.root_quat_w
+        attitude_mat = matrix_from_quat(quat_w)
 
         obs = torch.cat(
             [
-                drone_pose_w,  # 3: position in the world frame
-                drone_lin_vel_b,  # 3: linear velocity in the body frame
-                drone_ang_vel_b,  # 3: angular velocity in the body frame
-                drone_quat_w,  # 4: drone orientation (world frame quaternion)
-                drone_pos_gate_frame,  # 3: drone position in gate frame
-                gate_quat_w,  # 4: gate orientation (world frame quaternion)
+                self.env._robot.data.root_com_lin_vel_b,			# 3 dim (linear vel in body frame)
+                attitude_mat.view(attitude_mat.shape[0], -1),			# 9 dim (drone rotation matrix)
+                waypoint_pos_b_curr.view(waypoint_pos_b_curr.shape[0], -1),	# 12 dim (corners of current gate)
+                waypoint_pos_b_next.view(waypoint_pos_b_next.shape[0], -1),	# 12 dim (corners of next gate)
             ],
             dim=-1,
         )
-
         observations = {"policy": obs}
 
+        # Update yaw tracking
+        rpy = euler_xyz_from_quat(quat_w)
+        yaw_w = wrap_to_pi(rpy[2])
+
+        delta_yaw = yaw_w - self.env._previous_yaw
+        self.env._previous_yaw = yaw_w
+        self.env._yaw_n_laps += torch.where(delta_yaw < -np.pi, 1, 0)
+        self.env._yaw_n_laps -= torch.where(delta_yaw > np.pi, 1, 0)
+
+        self.env.unwrapped_yaw = yaw_w + 2 * np.pi * self.env._yaw_n_laps
+
+        self.env._previous_actions = self.env._actions.clone()
+
         return observations
+
+
+    # def get_observations(self) -> Dict[str, torch.Tensor]:
+    #     """Get observations. Read reset_idx() and quadcopter_env.py to see which drone info is extracted from the sim.
+    #     The following code is an example. You should delete it or heavily modify it once you begin the racing task."""
+
+    #     # TODO ----- START ----- Define tensors for your observation space. Be careful with frame transformations
+    #     #### Basic drone states, modify for your needs)
+    #     drone_pose_w = self.env._robot.data.root_link_pos_w  # (N, 3)
+    #     drone_lin_vel_b = self.env._robot.data.root_com_lin_vel_b  # (N, 3)
+    #     drone_quat_w = self.env._robot.data.root_quat_w  # (N, 4)
+    #     drone_ang_vel_b = self.env._robot.data.root_ang_vel_b  # (N, 3) [roll_rate, pitch_rate, yaw_rate]
+    #     current_gate_idx = self.env._idx_wp  # (N,)
+    #     gate_quat_w = self.env._waypoints_quat[current_gate_idx, :]  # (N, 4)
+    #     drone_pos_gate_frame = self.env._pose_drone_wrt_gate  # (N, 3)
+
+    #     obs = torch.cat(
+    #         [
+    #             drone_pose_w,  # 3: position in the world frame
+    #             drone_lin_vel_b,  # 3: linear velocity in the body frame
+    #             drone_ang_vel_b,  # 3: angular velocity in the body frame
+    #             drone_quat_w,  # 4: drone orientation (world frame quaternion)
+    #             drone_pos_gate_frame,  # 3: drone position in gate frame
+    #             gate_quat_w,  # 4: gate orientation (world frame quaternion)
+    #         ],
+    #         dim=-1,
+    #     )
+
+    #     observations = {"policy": obs}
+
+    #     return observations
 
     def reset_idx(self, env_ids: Optional[torch.Tensor]):
         """Reset specific environments to initial states."""
@@ -320,4 +380,3 @@ class DefaultQuadcopterStrategy:
 
         self.env._crashed[env_ids] = 0
 
-#
